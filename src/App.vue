@@ -1,0 +1,481 @@
+<template>
+  <DesktopLayout :is-sidebar-collapsed="isSidebarCollapsed">
+    <template #sidebar>
+      <section class="sidebar-root">
+        <SidebarThreadControls
+          v-if="!isSidebarCollapsed"
+          class="sidebar-thread-controls-host"
+          :is-sidebar-collapsed="isSidebarCollapsed"
+          :is-auto-refresh-enabled="isAutoRefreshEnabled"
+          :auto-refresh-button-label="autoRefreshButtonLabel"
+          :show-new-thread-button="true"
+          @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
+          @toggle-auto-refresh="onToggleAutoRefreshTimer"
+          @start-new-thread="onStartNewThreadFromToolbar"
+        />
+
+        <SidebarThreadTree :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
+          v-if="!isSidebarCollapsed"
+          :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads" @select="onSelectThread"
+          @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
+          @remove-project="onRemoveProject" @reorder-project="onReorderProject" />
+      </section>
+    </template>
+
+    <template #content>
+      <section class="content-root">
+        <ContentHeader :title="contentTitle">
+          <template #leading>
+            <SidebarThreadControls
+              v-if="isSidebarCollapsed"
+              class="sidebar-thread-controls-header-host"
+              :is-sidebar-collapsed="isSidebarCollapsed"
+              :is-auto-refresh-enabled="isAutoRefreshEnabled"
+              :auto-refresh-button-label="autoRefreshButtonLabel"
+              :show-new-thread-button="true"
+              @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
+              @toggle-auto-refresh="onToggleAutoRefreshTimer"
+              @start-new-thread="onStartNewThreadFromToolbar"
+            />
+          </template>
+        </ContentHeader>
+
+        <section class="content-body">
+          <template v-if="isHomeRoute">
+            <div class="content-grid">
+              <div class="new-thread-empty">
+                <p class="new-thread-hero">Let's build</p>
+                <ComposerDropdown class="new-thread-folder-dropdown" :model-value="newThreadCwd"
+                  :options="newThreadFolderOptions" placeholder="Choose folder"
+                  :disabled="newThreadFolderOptions.length === 0" @update:model-value="onSelectNewThreadFolder" />
+              </div>
+
+              <ThreadComposer :active-thread-id="composerThreadContextId" :disabled="isSendingMessage"
+                :models="availableModelIds" :selected-model="selectedModelId"
+                :selected-reasoning-effort="selectedReasoningEffort" :is-turn-in-progress="false"
+                :is-interrupting-turn="false" @submit="onSubmitThreadMessage"
+                @update:selected-model="onSelectModel" @update:selected-reasoning-effort="onSelectReasoningEffort" />
+            </div>
+          </template>
+          <template v-else>
+            <div class="content-grid">
+              <div class="content-thread">
+                <ThreadConversation :messages="filteredMessages" :is-loading="isLoadingMessages"
+                  :active-thread-id="composerThreadContextId" :scroll-state="selectedThreadScrollState"
+                  :live-overlay="liveOverlay"
+                  :pending-requests="selectedThreadServerRequests"
+                  @update-scroll-state="onUpdateThreadScrollState"
+                  @respond-server-request="onRespondServerRequest" />
+              </div>
+
+              <ThreadComposer :active-thread-id="composerThreadContextId"
+                :disabled="isSendingMessage || isLoadingMessages" :models="availableModelIds"
+                :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
+                :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
+                @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
+                @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
+            </div>
+          </template>
+        </section>
+      </section>
+    </template>
+  </DesktopLayout>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import DesktopLayout from './components/layout/DesktopLayout.vue'
+import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
+import ContentHeader from './components/content/ContentHeader.vue'
+import ThreadConversation from './components/content/ThreadConversation.vue'
+import ThreadComposer from './components/content/ThreadComposer.vue'
+import ComposerDropdown from './components/content/ComposerDropdown.vue'
+import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
+import { useDesktopState } from './composables/useDesktopState'
+import type { ReasoningEffort, ThreadScrollState } from './types/codex'
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
+
+const {
+  projectGroups,
+  projectDisplayNameById,
+  selectedThread,
+  selectedThreadScrollState,
+  selectedThreadServerRequests,
+  selectedLiveOverlay,
+  selectedThreadId,
+  availableModelIds,
+  selectedModelId,
+  selectedReasoningEffort,
+  messages,
+  isLoadingThreads,
+  isLoadingMessages,
+  isSendingMessage,
+  isInterruptingTurn,
+  isAutoRefreshEnabled,
+  autoRefreshSecondsLeft,
+  refreshAll,
+  selectThread,
+  setThreadScrollState,
+  archiveThreadById,
+  sendMessageToSelectedThread,
+  sendMessageToNewThread,
+  interruptSelectedThreadTurn,
+  setSelectedModelId,
+  setSelectedReasoningEffort,
+  respondToPendingServerRequest,
+  renameProject,
+  removeProject,
+  reorderProject,
+  toggleAutoRefreshTimer,
+  startPolling,
+  stopPolling,
+} = useDesktopState()
+
+const route = useRoute()
+const router = useRouter()
+const isRouteSyncInProgress = ref(false)
+const hasInitialized = ref(false)
+const newThreadCwd = ref('')
+const isSidebarCollapsed = ref(loadSidebarCollapsed())
+
+const routeThreadId = computed(() => {
+  const rawThreadId = route.params.threadId
+  return typeof rawThreadId === 'string' ? rawThreadId : ''
+})
+
+const knownThreadIdSet = computed(() => {
+  const ids = new Set<string>()
+  for (const group of projectGroups.value) {
+    for (const thread of group.threads) {
+      ids.add(thread.id)
+    }
+  }
+  return ids
+})
+
+const isHomeRoute = computed(() => route.name === 'home')
+const contentTitle = computed(() => {
+  if (isHomeRoute.value) return 'New thread'
+  return selectedThread.value?.title ?? 'Choose a thread'
+})
+const autoRefreshButtonLabel = computed(() =>
+  isAutoRefreshEnabled.value
+    ? `Auto refresh in ${String(autoRefreshSecondsLeft.value)}s`
+    : 'Enable 4s refresh',
+)
+const filteredMessages = computed(() =>
+  messages.value.filter((message) => {
+    const type = normalizeMessageType(message.messageType, message.role)
+    if (type === 'worked') return true
+    if (type === 'turnActivity.live' || type === 'turnError.live' || type === 'agentReasoning.live') return false
+    return true
+  }),
+)
+const liveOverlay = computed(() => selectedLiveOverlay.value)
+const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
+const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
+const newThreadFolderOptions = computed(() => {
+  const options: Array<{ value: string; label: string }> = []
+  const seenCwds = new Set<string>()
+
+  for (const group of projectGroups.value) {
+    const cwd = group.threads[0]?.cwd?.trim() ?? ''
+    if (!cwd || seenCwds.has(cwd)) continue
+    seenCwds.add(cwd)
+    options.push({
+      value: cwd,
+      label: projectDisplayNameById.value[group.projectName] ?? group.projectName,
+    })
+  }
+
+  return options
+})
+
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeyDown)
+  void initialize()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWindowKeyDown)
+  stopPolling()
+})
+
+function onSelectThread(threadId: string): void {
+  if (!threadId) return
+  if (route.name === 'thread' && routeThreadId.value === threadId) return
+  void router.push({ name: 'thread', params: { threadId } })
+}
+
+function onArchiveThread(threadId: string): void {
+  void archiveThreadById(threadId)
+}
+
+function onStartNewThread(projectName: string): void {
+  const projectGroup = projectGroups.value.find((group) => group.projectName === projectName)
+  const projectCwd = projectGroup?.threads[0]?.cwd?.trim() ?? ''
+  if (projectCwd) {
+    newThreadCwd.value = projectCwd
+  }
+  if (isHomeRoute.value) return
+  void router.push({ name: 'home' })
+}
+
+function onStartNewThreadFromToolbar(): void {
+  const cwd = selectedThread.value?.cwd?.trim() ?? ''
+  if (cwd) {
+    newThreadCwd.value = cwd
+  }
+  if (isHomeRoute.value) return
+  void router.push({ name: 'home' })
+}
+
+function onRenameProject(payload: { projectName: string; displayName: string }): void {
+  renameProject(payload.projectName, payload.displayName)
+}
+
+function onRemoveProject(projectName: string): void {
+  removeProject(projectName)
+}
+
+function onReorderProject(payload: { projectName: string; toIndex: number }): void {
+  reorderProject(payload.projectName, payload.toIndex)
+}
+
+function onUpdateThreadScrollState(payload: { threadId: string; state: ThreadScrollState }): void {
+  setThreadScrollState(payload.threadId, payload.state)
+}
+
+function onRespondServerRequest(payload: { id: number; result?: unknown; error?: { code?: number; message: string } }): void {
+  void respondToPendingServerRequest(payload)
+}
+
+function onToggleAutoRefreshTimer(): void {
+  toggleAutoRefreshTimer()
+}
+
+function setSidebarCollapsed(nextValue: boolean): void {
+  if (isSidebarCollapsed.value === nextValue) return
+  isSidebarCollapsed.value = nextValue
+  saveSidebarCollapsed(nextValue)
+}
+
+function onWindowKeyDown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return
+  if (!event.ctrlKey && !event.metaKey) return
+  if (event.shiftKey || event.altKey) return
+  if (event.key.toLowerCase() !== 'b') return
+  event.preventDefault()
+  setSidebarCollapsed(!isSidebarCollapsed.value)
+}
+
+function onSubmitThreadMessage(text: string): void {
+  if (isHomeRoute.value) {
+    void submitFirstMessageForNewThread(text)
+    return
+  }
+  void sendMessageToSelectedThread(text)
+}
+
+function onSelectNewThreadFolder(cwd: string): void {
+  newThreadCwd.value = cwd.trim()
+}
+
+function onSelectModel(modelId: string): void {
+  setSelectedModelId(modelId)
+}
+
+function onSelectReasoningEffort(effort: ReasoningEffort | ''): void {
+  setSelectedReasoningEffort(effort)
+}
+
+function onInterruptTurn(): void {
+  void interruptSelectedThreadTurn()
+}
+
+function loadSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
+}
+
+function saveSidebarCollapsed(value: boolean): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, value ? '1' : '0')
+}
+
+function normalizeMessageType(rawType: string | undefined, role: string): string {
+  const normalized = (rawType ?? '').trim()
+  if (normalized.length > 0) {
+    return normalized
+  }
+  return role.trim() || 'message'
+}
+
+async function initialize(): Promise<void> {
+  await refreshAll()
+  hasInitialized.value = true
+  await syncThreadSelectionWithRoute()
+  startPolling()
+}
+
+async function syncThreadSelectionWithRoute(): Promise<void> {
+  if (isRouteSyncInProgress.value) return
+  isRouteSyncInProgress.value = true
+
+  try {
+    if (route.name === 'home') {
+      if (selectedThreadId.value !== '') {
+        await selectThread('')
+      }
+      return
+    }
+
+    if (route.name === 'thread') {
+      const threadId = routeThreadId.value
+      if (!threadId) return
+
+      if (!knownThreadIdSet.value.has(threadId)) {
+        await router.replace({ name: 'home' })
+        return
+      }
+
+      if (selectedThreadId.value !== threadId) {
+        await selectThread(threadId)
+      }
+      return
+    }
+
+  } finally {
+    isRouteSyncInProgress.value = false
+  }
+}
+
+watch(
+  () =>
+    [
+      route.name,
+      routeThreadId.value,
+      isLoadingThreads.value,
+      knownThreadIdSet.value.has(routeThreadId.value),
+      selectedThreadId.value,
+    ] as const,
+  async () => {
+    if (!hasInitialized.value) return
+    await syncThreadSelectionWithRoute()
+  },
+)
+
+watch(
+  () => selectedThreadId.value,
+  async (threadId) => {
+    if (!hasInitialized.value) return
+    if (isRouteSyncInProgress.value) return
+    if (isHomeRoute.value) return
+
+    if (!threadId) {
+      if (route.name !== 'home') {
+        await router.replace({ name: 'home' })
+      }
+      return
+    }
+
+    if (route.name === 'thread' && routeThreadId.value === threadId) return
+    await router.replace({ name: 'thread', params: { threadId } })
+  },
+)
+
+watch(
+  () => newThreadFolderOptions.value,
+  (options) => {
+    if (options.length === 0) {
+      newThreadCwd.value = ''
+      return
+    }
+    const hasSelected = options.some((option) => option.value === newThreadCwd.value)
+    if (!hasSelected) {
+      newThreadCwd.value = options[0].value
+    }
+  },
+  { immediate: true },
+)
+
+async function submitFirstMessageForNewThread(text: string): Promise<void> {
+  if (!newThreadCwd.value) return
+
+  try {
+    const threadId = await sendMessageToNewThread(text, newThreadCwd.value)
+    if (!threadId) return
+    await router.replace({ name: 'thread', params: { threadId } })
+  } catch {
+    // Error is already reflected in state.
+  }
+}
+</script>
+
+<style scoped>
+@reference "tailwindcss";
+
+.sidebar-root {
+  @apply min-h-full py-4 px-2 flex flex-col gap-2 select-none;
+}
+
+.sidebar-root input,
+.sidebar-root textarea {
+  @apply select-text;
+}
+
+.content-root {
+  @apply h-full min-h-0 w-full flex flex-col overflow-y-hidden overflow-x-visible bg-white;
+}
+
+.sidebar-thread-controls-host {
+  @apply mt-1 -translate-y-px px-2 pb-1;
+}
+
+.sidebar-thread-controls-header-host {
+  @apply ml-1;
+}
+
+.content-body {
+  @apply flex-1 min-h-0 w-full flex flex-col gap-3 pt-1 pb-4 overflow-y-hidden overflow-x-visible;
+}
+
+.content-error {
+  @apply m-0 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700;
+}
+
+.content-grid {
+  @apply flex-1 min-h-0 flex flex-col gap-3;
+}
+
+.content-thread {
+  @apply flex-1 min-h-0;
+}
+
+.new-thread-empty {
+  @apply flex-1 min-h-0 flex flex-col items-center justify-center gap-0.5 px-6;
+}
+
+.new-thread-hero {
+  @apply m-0 text-[2.5rem] font-normal leading-[1.05] text-zinc-900;
+}
+
+.new-thread-folder-dropdown {
+  @apply text-[2.5rem] text-zinc-500;
+}
+
+.new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
+  @apply h-auto text-[2.5rem] leading-[1.05];
+}
+
+.new-thread-folder-dropdown :deep(.composer-dropdown-value) {
+  @apply leading-[1.05];
+}
+
+.new-thread-folder-dropdown :deep(.composer-dropdown-chevron) {
+  @apply h-5 w-5 mt-0;
+}
+
+</style>

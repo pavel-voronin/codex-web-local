@@ -1,0 +1,58 @@
+{
+  "name": "codex-web-local",
+  "version": "0.1.0",
+  "description": "A lightweight web interface for Codex that runs on top of the Codex app-server, allowing remote access from any browser",
+  "type": "module",
+  "license": "MIT",
+  "author": "Pavel Voronin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pavel-voronin/codex-web-local.git"
+  },
+  "homepage": "https://github.com/pavel-voronin/codex-web-local#readme",
+  "bugs": {
+    "url": "https://github.com/pavel-voronin/codex-web-local/issues"
+  },
+  "keywords": [
+    "codex",
+    "openai",
+    "web-ui",
+    "remote",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "codex-web-local": "dist-cli/index.js"
+  },
+  "files": [
+    "dist/",
+    "dist-cli/"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build:frontend": "vue-tsc --noEmit && vite build",
+    "build:cli": "tsup",
+    "build": "npm run build:frontend && npm run build:cli",
+    "preview": "vite preview",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "tailwindcss": "^4.1.18",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.6.4",
+    "vue-tsc": "^2.2.0"
+  }
+}
