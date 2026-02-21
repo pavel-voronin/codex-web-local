@@ -402,8 +402,6 @@ watch(
 )
 
 async function submitFirstMessageForNewThread(text: string): Promise<void> {
-  if (!newThreadCwd.value) return
-
   try {
     const threadId = await sendMessageToNewThread(text, newThreadCwd.value)
     if (!threadId) return

@@ -1631,16 +1631,20 @@ export function useDesktopState() {
     const nextText = text.trim()
     const targetCwd = cwd.trim()
     const selectedModel = selectedModelId.value.trim()
-    if (!nextText || !targetCwd) return ''
+    if (!nextText) return ''
 
     isSendingMessage.value = true
     error.value = ''
     let threadId = ''
 
     try {
-      threadId = await startThread(targetCwd, selectedModel || undefined)
+      threadId = await startThread(targetCwd || undefined, selectedModel || undefined)
       if (!threadId) return ''
 
+      resumedThreadById.value = {
+        ...resumedThreadById.value,
+        [threadId]: true,
+      }
       setSelectedThreadId(threadId)
       shouldAutoScrollOnNextAgentEvent = true
       setTurnSummaryForThread(threadId, null)

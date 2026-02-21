@@ -2,3 +2,4 @@ node_modules/
 dist/
 dist-cli/
 *.tsbuildinfo
+PROJECT_SPEC.md
