@@ -44,11 +44,13 @@
       <span class="thread-tree-header">Threads</span>
     </SidebarMenuRow>
 
-    <p v-if="isLoading && groups.length === 0" class="thread-tree-loading">Loading threads...</p>
+    <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">No matching threads</p>
+
+    <p v-else-if="isLoading && groups.length === 0" class="thread-tree-loading">Loading threads...</p>
 
     <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
       <article
-        v-for="group in groups"
+        v-for="group in filteredGroups"
         :key="group.projectName"
         :ref="(el) => setProjectGroupRef(group.projectName, el)"
         class="project-group"
@@ -217,6 +219,7 @@ const props = defineProps<{
   projectDisplayNameById: Record<string, string>
   selectedThreadId: string
   isLoading: boolean
+  searchQuery: string
 }>()
 
 const emit = defineEmits<{
@@ -314,6 +317,29 @@ watch(
   { deep: true },
 )
 
+const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCase())
+
+const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
+
+function threadMatchesSearch(thread: UiThread): boolean {
+  if (!isSearchActive.value) return true
+  const q = normalizedSearchQuery.value
+  return (
+    thread.title.toLowerCase().includes(q) ||
+    thread.preview.toLowerCase().includes(q)
+  )
+}
+
+const filteredGroups = computed<UiProjectGroup[]>(() => {
+  if (!isSearchActive.value) return props.groups
+  return props.groups
+    .map((group) => ({
+      ...group,
+      threads: group.threads.filter(threadMatchesSearch),
+    }))
+    .filter((group) => group.threads.length > 0)
+})
+
 const threadById = computed(() => {
   const map = new Map<string, UiThread>()
 
@@ -329,7 +355,8 @@ const threadById = computed(() => {
 const pinnedThreads = computed(() =>
   pinnedThreadIds.value
     .map((threadId) => threadById.value.get(threadId) ?? null)
-    .filter((thread): thread is UiThread => thread !== null),
+    .filter((thread): thread is UiThread => thread !== null)
+    .filter(threadMatchesSearch),
 )
 
 const projectedDropProjectIndex = computed<number | null>(() => {
@@ -343,7 +370,8 @@ const projectedDropProjectIndex = computed<number | null>(() => {
 })
 
 const layoutProjectOrder = computed<string[]>(() => {
-  const names = props.groups.map((group) => group.projectName)
+  const sourceGroups = isSearchActive.value ? filteredGroups.value : props.groups
+  const names = sourceGroups.map((group) => group.projectName)
   const drag = activeProjectDrag.value
   const projectedIndex = projectedDropProjectIndex.value
 
@@ -846,6 +874,7 @@ function projectThreads(group: UiProjectGroup): UiThread[] {
 }
 
 function visibleThreads(group: UiProjectGroup): UiThread[] {
+  if (isSearchActive.value) return projectThreads(group)
   if (isCollapsed(group.projectName)) return []
 
   const rows = projectThreads(group)
@@ -853,6 +882,7 @@ function visibleThreads(group: UiProjectGroup): UiThread[] {
 }
 
 function hasHiddenThreads(group: UiProjectGroup): boolean {
+  if (isSearchActive.value) return false
   return !isCollapsed(group.projectName) && projectThreads(group).length > 10
 }
 
@@ -930,6 +960,10 @@ onBeforeUnmount(() => {
 
 .thread-tree-loading {
   @apply px-3 py-2 text-sm text-zinc-500;
+}
+
+.thread-tree-no-results {
+  @apply px-3 py-2 text-sm text-zinc-400;
 }
 
 .thread-tree-groups {

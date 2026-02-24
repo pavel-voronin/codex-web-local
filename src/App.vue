@@ -12,11 +12,45 @@
           @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
           @toggle-auto-refresh="onToggleAutoRefreshTimer"
           @start-new-thread="onStartNewThreadFromToolbar"
-        />
+        >
+          <button
+            class="sidebar-search-toggle"
+            type="button"
+            :aria-pressed="isSidebarSearchVisible"
+            aria-label="Search threads"
+            title="Search threads"
+            @click="toggleSidebarSearch"
+          >
+            <IconTablerSearch class="sidebar-search-toggle-icon" />
+          </button>
+        </SidebarThreadControls>
+
+        <div v-if="!isSidebarCollapsed && isSidebarSearchVisible" class="sidebar-search-bar">
+          <IconTablerSearch class="sidebar-search-bar-icon" />
+          <input
+            ref="sidebarSearchInputRef"
+            v-model="sidebarSearchQuery"
+            class="sidebar-search-input"
+            type="text"
+            placeholder="Filter threads..."
+            @keydown="onSidebarSearchKeydown"
+          />
+          <button
+            v-if="sidebarSearchQuery.length > 0"
+            class="sidebar-search-clear"
+            type="button"
+            aria-label="Clear search"
+            @click="clearSidebarSearch"
+          >
+            <IconTablerX class="sidebar-search-clear-icon" />
+          </button>
+        </div>
 
         <SidebarThreadTree :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
           v-if="!isSidebarCollapsed"
-          :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads" @select="onSelectThread"
+          :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
+          :search-query="sidebarSearchQuery"
+          @select="onSelectThread"
           @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
           @remove-project="onRemoveProject" @reorder-project="onReorderProject" />
       </section>
@@ -83,7 +117,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
@@ -92,6 +126,8 @@ import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
+import IconTablerSearch from './components/icons/IconTablerSearch.vue'
+import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
 import type { ReasoningEffort, ThreadScrollState } from './types/codex'
 
@@ -139,6 +175,9 @@ const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const newThreadCwd = ref('')
 const isSidebarCollapsed = ref(loadSidebarCollapsed())
+const sidebarSearchQuery = ref('')
+const isSidebarSearchVisible = ref(false)
+const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 
 const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
@@ -202,6 +241,27 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onWindowKeyDown)
   stopPolling()
 })
+
+function toggleSidebarSearch(): void {
+  isSidebarSearchVisible.value = !isSidebarSearchVisible.value
+  if (isSidebarSearchVisible.value) {
+    nextTick(() => sidebarSearchInputRef.value?.focus())
+  } else {
+    sidebarSearchQuery.value = ''
+  }
+}
+
+function clearSidebarSearch(): void {
+  sidebarSearchQuery.value = ''
+  sidebarSearchInputRef.value?.focus()
+}
+
+function onSidebarSearchKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    isSidebarSearchVisible.value = false
+    sidebarSearchQuery.value = ''
+  }
+}
 
 function onSelectThread(threadId: string): void {
   if (!threadId) return
@@ -402,8 +462,6 @@ watch(
 )
 
 async function submitFirstMessageForNewThread(text: string): Promise<void> {
-  if (!newThreadCwd.value) return
-
   try {
     const threadId = await sendMessageToNewThread(text, newThreadCwd.value)
     if (!threadId) return
@@ -432,6 +490,38 @@ async function submitFirstMessageForNewThread(text: string): Promise<void> {
 
 .sidebar-thread-controls-host {
   @apply mt-1 -translate-y-px px-2 pb-1;
+}
+
+.sidebar-search-toggle {
+  @apply h-6.75 w-6.75 rounded-md border border-transparent bg-transparent text-zinc-600 flex items-center justify-center transition hover:border-zinc-200 hover:bg-zinc-50;
+}
+
+.sidebar-search-toggle[aria-pressed='true'] {
+  @apply border-zinc-300 bg-zinc-100 text-zinc-700;
+}
+
+.sidebar-search-toggle-icon {
+  @apply w-4 h-4;
+}
+
+.sidebar-search-bar {
+  @apply flex items-center gap-1.5 mx-2 px-2 py-1 rounded-md border border-zinc-200 bg-white transition-colors focus-within:border-zinc-400;
+}
+
+.sidebar-search-bar-icon {
+  @apply w-3.5 h-3.5 text-zinc-400 shrink-0;
+}
+
+.sidebar-search-input {
+  @apply flex-1 min-w-0 bg-transparent text-sm text-zinc-800 placeholder-zinc-400 outline-none border-none p-0;
+}
+
+.sidebar-search-clear {
+  @apply w-4 h-4 rounded text-zinc-400 flex items-center justify-center transition hover:text-zinc-600;
+}
+
+.sidebar-search-clear-icon {
+  @apply w-3.5 h-3.5;
 }
 
 .sidebar-thread-controls-header-host {

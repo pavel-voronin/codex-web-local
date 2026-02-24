@@ -22,6 +22,8 @@
       <IconTablerRefresh class="sidebar-thread-controls-icon" />
     </button>
 
+    <slot />
+
     <button
       v-if="showNewThreadButton"
       class="sidebar-thread-controls-button"
